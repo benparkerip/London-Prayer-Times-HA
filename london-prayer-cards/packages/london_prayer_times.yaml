@@ -1,0 +1,99 @@
+# London Prayer Times — sensor bundle
+#
+# Produces the entities the London Prayer Times cards expect:
+#   sensor.london_prayer_times_fajr / _sunrise / _dhuhr / _asr / _magrib / _isha
+#   sensor.london_prayer_times_month   (attributes.times = full month table)
+#   input_number.prayer_calendar_month_offset
+#
+# Data source: https://www.londonprayertimes.com/api/  (East London Mosque
+# timetable, London only). Apply for a free API key there first.
+#
+# SETUP
+# 1. Enable packages if you haven't already — in configuration.yaml:
+#      homeassistant:
+#        packages: !include_dir_named packages
+# 2. Drop this file in <config>/packages/london_prayer_times.yaml
+# 3. Restart Home Assistant, then go to Settings → Devices & services →
+#    Entities, find "London Prayer Times API Key" (input_text.london_prayer_times_api_key)
+#    and paste in the key you were emailed. No restart needed after that —
+#    the sensors re-poll automatically (default every 6h) and immediately
+#    on demand (the cards call homeassistant.update_entity when you browse
+#    months).
+#
+# PRIVACY NOTE
+# The API key lives in an input_text helper (mode: password) rather than
+# secrets.yaml, since the request URL is templated per day/month and can't
+# mix a !secret with Jinja. Its state is excluded from recorder history
+# below so the key itself doesn't get written into your database — but the
+# entity itself is still visible to anyone with Home Assistant access, same
+# as any other helper.
+
+input_text:
+  london_prayer_times_api_key:
+    name: London Prayer Times API Key
+    mode: password
+    icon: mdi:key
+
+input_number:
+  prayer_calendar_month_offset:
+    name: Prayer Calendar Month Offset
+    min: -12
+    max: 12
+    step: 1
+    initial: 0
+    icon: mdi:calendar-arrow-right
+
+recorder:
+  exclude:
+    entities:
+      - input_text.london_prayer_times_api_key
+
+rest:
+  # Today's times → the five prayer + sunrise timestamp sensors.
+  - resource: >-
+      https://www.londonprayertimes.com/api/times/?format=json&city=london&24hours=true&key={{ states('input_text.london_prayer_times_api_key') }}&date={{ now().strftime('%Y-%m-%d') }}
+    scan_interval: 21600  # 6 hours; a new day's times don't change mid-day
+    sensor:
+      - name: "London Prayer Times Fajr"
+        unique_id: london_prayer_times_fajr
+        device_class: timestamp
+        value_template: "{{ today_at(value_json.fajr) }}"
+      - name: "London Prayer Times Sunrise"
+        unique_id: london_prayer_times_sunrise
+        device_class: timestamp
+        value_template: "{{ today_at(value_json.sunrise) }}"
+      - name: "London Prayer Times Dhuhr"
+        unique_id: london_prayer_times_dhuhr
+        device_class: timestamp
+        value_template: "{{ today_at(value_json.dhuhr) }}"
+      - name: "London Prayer Times Asr"
+        unique_id: london_prayer_times_asr
+        device_class: timestamp
+        # value_json.asr_2 is the Hanafi calculation, if you'd rather use that.
+        value_template: "{{ today_at(value_json.asr) }}"
+      - name: "London Prayer Times Magrib"
+        unique_id: london_prayer_times_magrib
+        device_class: timestamp
+        value_template: "{{ today_at(value_json.magrib) }}"
+      - name: "London Prayer Times Isha"
+        unique_id: london_prayer_times_isha
+        device_class: timestamp
+        value_template: "{{ today_at(value_json.isha) }}"
+
+  # Whole-month table → sensor.london_prayer_times_month, used by the month
+  # card. `prayer_calendar_month_offset` is set by the card's prev/next
+  # buttons; this resource re-resolves the target year/month on every poll,
+  # and the card forces a poll (homeassistant.update_entity) after changing it.
+  - resource: >-
+      {% set offset = states('input_number.prayer_calendar_month_offset') | int(0) %}
+      {% set total = now().month - 1 + offset %}
+      {% set year = now().year + (total // 12) %}
+      {% set month = (total % 12) + 1 %}
+      https://www.londonprayertimes.com/api/times/?format=json&city=london&24hours=true&key={{ states('input_text.london_prayer_times_api_key') }}&year={{ year }}&month={{ '%02d' % month }}
+    scan_interval: 21600
+    sensor:
+      - name: "London Prayer Times Month"
+        unique_id: london_prayer_times_month
+        value_template: "{{ value_json.city }}"
+        json_attributes:
+          - times
